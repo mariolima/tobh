@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 
@@ -33,13 +34,15 @@ func main() {
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
+			driver, err := neo4j.NewDriver("bolt://work.vm:7687", neo4j.BasicAuth("neo4j", "test", ""))
+			defer driver.Close()
+			session := driver.NewSession(neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+			defer session.Close()
 			for u := range logins {
-				driver, err := neo4j.NewDriver("bolt://work.vm:7687", neo4j.BasicAuth("neo4j", "test", ""))
 				if err != nil {
 					log.Fatal(err)
 					return
 				}
-				session := driver.NewSession(neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 				split := strings.Split(u, ":")
 				userd := strings.ToUpper(split[0])
 				if !strings.Contains(userd, "\\") {
@@ -48,15 +51,29 @@ func main() {
 				domain := strings.Split(userd, "\\")[0]
 				user := strings.Split(userd, "\\")[1] + "@" + domain
 				pass := strings.Join(split[1:len(split)], "")
-				stmt := "MATCH (H:User {name:$user}) SET H.password=$pass,H.owned=true RETURN H.name"
-				params := map[string]interface{}{"user": user, "pass": pass}
-				res, err := session.Run(stmt, params)
-				session.Close()
-				driver.Close()
-				log.Debug(res)
+				res, err := session.ReadTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+					var list []string
+
+					stmt := "MATCH (H:User {name:$user}) SET H.password=$pass,H.owned=true RETURN H.name"
+					params := map[string]interface{}{"user": user, "pass": pass}
+					result, err := tx.Run(stmt, params)
+					if err != nil {
+						return nil, err
+					}
+
+					for result.Next() {
+						list = append(list, result.Record().Values[0].(string))
+					}
+					if err = result.Err(); err != nil {
+						return nil, err
+					}
+
+					return list, nil
+				}, neo4j.WithTxTimeout(3*time.Second))
 				if err != nil {
 					log.Fatal(err)
 				}
+				log.Debug(res.([]string))
 			}
 			wg.Done()
 			return
