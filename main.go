@@ -15,12 +15,25 @@ import (
 )
 
 func main() {
-	// verbose flag
+	// Number of concurrent neo4j query threads
 	var concurrency int
-	flag.IntVar(&concurrency, "c", 5, "concurrency")
+	flag.IntVar(&concurrency, "c", 5, "number of threads")
 
+	// Verbose flag for error msgs
 	var verbose bool
 	flag.BoolVar(&verbose, "v", true, "output errors to stderr")
+
+	// Neo4j bolt URL
+	var neo4jUrl string
+	flag.StringVar(&neo4jUrl, "b", "bolt://localhost:7687", "neo4j endpoint (Default: bolt://localhost:7687)")
+
+	// Neo4j bolt Username
+	var neo4jUsername string
+	flag.StringVar(&neo4jUsername, "u", "neo4j", "neo4j username (Default: neo4j)")
+
+	// Neo4j bolt Password
+	var neo4jPassword string
+	flag.StringVar(&neo4jPassword, "p", "neo4j", "neo4j password (Default: neo4j)")
 
 	flag.Parse()
 
@@ -34,13 +47,17 @@ func main() {
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			driver, err := neo4j.NewDriver("bolt://work.vm:7687", neo4j.BasicAuth("neo4j", "test", ""))
+			driver, err := neo4j.NewDriver(neo4jUrl, neo4j.BasicAuth(neo4jUsername, neo4jPassword, ""))
+			if err != nil {
+				log.Debug(err)
+				log.Fatal(err)
+				return
+			}
 			defer driver.Close()
 			session := driver.NewSession(neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 			defer session.Close()
 			for u := range logins {
 				if err != nil {
-					log.Fatal(err)
 					return
 				}
 				split := strings.Split(u, ":")
@@ -51,7 +68,7 @@ func main() {
 				domain := strings.Split(userd, "\\")[0]
 				user := strings.Split(userd, "\\")[1] + "@" + domain
 				pass := strings.Join(split[1:len(split)], "")
-				res, err := session.ReadTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+				res, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 					var list []string
 
 					stmt := "MATCH (H:User {name:$user}) SET H.password=$pass,H.owned=true RETURN H.name"
@@ -71,7 +88,7 @@ func main() {
 					return list, nil
 				}, neo4j.WithTxTimeout(3*time.Second))
 				if err != nil {
-					log.Fatal(err)
+					log.Debug(err)
 				}
 				log.Debug(res.([]string))
 			}
@@ -79,8 +96,6 @@ func main() {
 			return
 		}()
 	}
-
-	// SETUP client
 
 	// accept logins on stdin
 	sc := bufio.NewScanner(os.Stdin)
@@ -90,7 +105,6 @@ func main() {
 
 	close(logins)
 
-	// check there were no errors reading stdin (unlikely)
 	if err := sc.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read input: %s\n", err)
 	}
