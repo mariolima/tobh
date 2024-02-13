@@ -1,5 +1,5 @@
 # tobh
-Fetches hashcat cracked NTLM's to Bloodhound. Adds `password` parameter to each user and marks them as `pwned`.
+Fetches hashcat cracked NTLM's to Bloodhound. Adds `password` parameter to each user and marks them as `owned`.
 
 ## usage example
 ```bash
